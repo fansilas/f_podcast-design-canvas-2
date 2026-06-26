@@ -212,11 +212,28 @@
     return JSON.stringify(library || createLibrary());
   }
 
+  function syncCountersFromLibrary(library) {
+    const shows = library && Array.isArray(library.shows) ? library.shows : [];
+    shows.forEach(function (show) {
+      const showMatch = /^show-(\d+)$/.exec(show.id || "");
+      if (showMatch) {
+        showCounter = Math.max(showCounter, Number(showMatch[1]));
+      }
+      (Array.isArray(show.episodes) ? show.episodes : []).forEach(function (ep) {
+        const epMatch = /^ep-(\d+)$/.exec(ep.id || "");
+        if (epMatch) {
+          episodeCounter = Math.max(episodeCounter, Number(epMatch[1]));
+        }
+      });
+    });
+  }
+
   function deserializeLibrary(json) {
     if (!json) return createLibrary();
     try {
       const parsed = JSON.parse(json);
       if (!parsed || !Array.isArray(parsed.shows)) return createLibrary();
+      syncCountersFromLibrary(parsed);
       return parsed;
     } catch (err) {
       return createLibrary();

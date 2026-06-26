@@ -143,6 +143,16 @@
     return JSON.stringify(store || createStore());
   }
 
+  function syncCountersFromStore(store) {
+    const list = store && Array.isArray(store.templates) ? store.templates : [];
+    list.forEach(function (template) {
+      const match = /^tpl-(\d+)$/.exec(template.id || "");
+      if (match) {
+        templateCounter = Math.max(templateCounter, Number(match[1]));
+      }
+    });
+  }
+
   function deserializeStore(json) {
     if (!json) {
       return createStore();
@@ -152,7 +162,9 @@
       if (!parsed || !Array.isArray(parsed.templates)) {
         return createStore();
       }
-      return { templates: parsed.templates };
+      const store = { templates: parsed.templates };
+      syncCountersFromStore(store);
+      return store;
     } catch (err) {
       return createStore();
     }

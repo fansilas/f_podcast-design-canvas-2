@@ -235,6 +235,16 @@
     return JSON.stringify(gallery || createGallery());
   }
 
+  function syncCountersFromGallery(gallery) {
+    const list = gallery && Array.isArray(gallery.listings) ? gallery.listings : [];
+    list.forEach(function (listing) {
+      const match = /^gal-(\d+)$/.exec(listing.id || "");
+      if (match) {
+        listingCounter = Math.max(listingCounter, Number(match[1]));
+      }
+    });
+  }
+
   function deserializeGallery(json) {
     if (!json) {
       return createGallery();
@@ -244,7 +254,9 @@
       if (!parsed || !Array.isArray(parsed.listings)) {
         return createGallery();
       }
-      return { listings: parsed.listings };
+      const store = { listings: parsed.listings };
+      syncCountersFromGallery(store);
+      return store;
     } catch (err) {
       return createGallery();
     }
