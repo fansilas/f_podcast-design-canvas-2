@@ -8,7 +8,7 @@
 // and episode import polish (#77, #86, #89), visual style preset cards (#94, #102),
 // and creator template gallery (#106), home screen focus (#112),
 // gallery copy polish (#117), first-episode import (#130), import handoff (#142),
-// and preset-first import setup (#147).
+// and preset-first import setup (#147), and setup completion handoff (#149).
 (function () {
   const ES = window.PdcEpisodeSetup;
   const STY = window.PdcEpisodeStyle;
@@ -538,9 +538,9 @@
     );
   }
 
-  function renderEpisodeImportRecap(summary) {
-    const handoff = ES.buildImportHandoff(summary);
-    const styleLine = importStyleSummaryLine();
+  function renderEpisodeImportRecap(summary, setupContext) {
+    const completion = ES.buildSetupCompletionHandoff(summary, setupContext || {});
+    const handoff = completion.handoff;
     const speakerItems = handoff.speakers.map((speaker) => {
       const bucketClass = ES.speakerBucketCueClass(speaker.role);
       const socialItems = speaker.social.length
@@ -560,23 +560,29 @@
 
     return el(
       "section",
-      { class: "card episode-import-recap episode-import-handoff" },
-      el("p", { class: "eyebrow episode-import-handoff-eyebrow" }, "Import accepted"),
+      { class: "card episode-import-recap episode-import-handoff setup-completion-recap" },
+      el("p", { class: "eyebrow episode-import-handoff-eyebrow" }, completion.completionEyebrow),
       el("h3", {}, "Episode setup summary"),
-      el("p", { class: "hint episode-import-handoff-lead" }, handoff.confirmationLead),
+      el("p", { class: "hint episode-import-handoff-lead" }, completion.completionLead),
       el(
         "dl",
         { class: "episode-import-handoff-grid" },
         el("div", { class: "episode-import-handoff-item" },
+          el("dt", {}, "Episode"),
+          el("dd", {}, completion.episodeTitle),
+        ),
+        el("div", { class: "episode-import-handoff-item" },
+          el("dt", {}, "Episode look"),
+          el("dd", {}, completion.presetSummary),
+        ),
+        el("div", { class: "episode-import-handoff-item" },
           el("dt", {}, "Imported source"),
           el("dd", {}, `${handoff.sourceLabel}: ${handoff.sourceDetail}`),
         ),
-        styleLine
-          ? el("div", { class: "episode-import-handoff-item" },
-            el("dt", {}, "Episode look"),
-            el("dd", {}, styleLine),
-          )
-          : null,
+        el("div", { class: "episode-import-handoff-item" },
+          el("dt", {}, "Speaker roles"),
+          el("dd", {}, completion.roleSummary || "Assign speakers during setup"),
+        ),
       ),
       el("h4", { class: "episode-import-handoff-speakers-title" }, "Speakers driving this episode"),
       el("ul", { class: "episode-import-handoff-speakers" }, speakerItems),
@@ -1696,21 +1702,81 @@
     });
   }
 
-  function applyReadyImportDefaults() {
-    if (!ES.canApplyImportContinueDefaults(state)) {
+  function applyPendingShowNameDefault() {
+    if (!pendingShowCreation) {
       return;
     }
-    if (pendingShowCreation) {
-      const showNameInput = document.getElementById("f-show-name");
-      if (showNameInput && !trim(showNameInput.value)) {
-        showNameInput.value = ES.defaultImportShowName();
-      }
+    const showNameInput = document.getElementById("f-show-name");
+    if (showNameInput && !trim(showNameInput.value)) {
+      showNameInput.value = ES.defaultImportShowName();
+    }
+  }
+
+  function applyReadyImportDefaults() {
+    applyPendingShowNameDefault();
+    if (!ES.canApplyImportContinueDefaults(state)) {
+      return;
     }
     const showName = trim(document.getElementById("f-show-name") && document.getElementById("f-show-name").value)
       || (activeShowId && LIB ? (LIB.getShow(showLibrary, activeShowId) || {}).name : "")
       || ES.defaultImportShowName();
     state = ES.applyImportContinueDefaults(state, { showName });
     writeSetupFormFromState();
+    ensureSetupStyleApplied();
+  }
+
+  function applySandboxHandoffSourceIfNeeded() {
+    state = ES.applySandboxHandoffSource(state);
+  }
+
+  function ensureSetupStyleApplied() {
+    if (!STY) {
+      return;
+    }
+    if (!styleSelection) {
+      styleSelection = STY.createSelection();
+    }
+    appliedStyle = STY.summarizeStyle(styleSelection, state.speakers.length);
+  }
+
+  function setupContinueSummaryLine() {
+    const episodeLine = trim(state.episodeName) || "Episode name pending";
+    const presetLine = importStyleSummaryLine();
+    const sourceLine = ES.normalizeMode(state.sourceMode) === "upload"
+      ? "Uploaded speaker files"
+      : (trim(state.riversideLink) ? "Riverside link ready" : "Recording source pending");
+    return `${episodeLine} · ${presetLine} · ${sourceLine}`;
+  }
+
+  function renderSetupContinueBar() {
+    const bar = el("div", { class: "actions setup-actions setup-cta-bar setup-cta-bar-sticky" });
+    const summary = el(
+      "div",
+      { class: "setup-continue-summary" },
+      el("p", { class: "setup-continue-eyebrow" }, "Hand off to workspace"),
+      el("p", { class: "hint setup-continue-line" }, setupContinueSummaryLine()),
+    );
+    bar.appendChild(summary);
+    if (activeShowId) {
+      const backShow = el("button", { type: "button", class: "btn-secondary", id: "setup-back-show" }, "← Back to show");
+      backShow.addEventListener("click", () => {
+        persistEpisodeSession();
+        renderShowDetail(activeShowId);
+      });
+      bar.appendChild(backShow);
+    }
+    bar.appendChild(
+      el(
+        "button",
+        {
+          type: "submit",
+          class: "btn-primary setup-continue-btn",
+          id: "setup-complete-continue",
+        },
+        "Continue to audio polish →",
+      ),
+    );
+    return bar;
   }
 
   function syncImportReadyBanner() {
@@ -1736,7 +1802,7 @@
       el(
         "p",
         { class: "hint" },
-        "Click Continue to save this source, keep each speaker bucket, and open the workspace import summary. Any blank show, episode, or speaker names use friendly defaults until you rename them.",
+        "Click Continue to audio polish to save this source, keep each speaker bucket, and open the production workspace. Any blank show, episode, or speaker names use friendly defaults until you rename them.",
       ),
     );
     if (actions) {
@@ -1784,7 +1850,7 @@
       setupSectionHeader(
         stepNum,
         "Episode look",
-        "Choose a publish-ready preset — each card shows realistic speaker framing, captions, and overlay treatment.",
+        "Choose a publish-ready preset — when your recording source is ready, selecting a preset opens the production workspace with your episode look saved.",
       ),
     );
     const grid = el("div", { class: "setup-preset-grid preset-grid" });
@@ -1807,8 +1873,12 @@
       card.addEventListener("click", () => {
         styleSelection = STY.applyPresetToSelection(styleSelection, preset.id, layoutCustomized);
         appliedStyle = STY.summarizeStyle(styleSelection, state.speakers.length);
+        applySandboxHandoffSourceIfNeeded();
         activeTemplateId = null;
         canvasDoc = null;
+        if (tryCompleteSetupHandoff({ quiet: true })) {
+          return;
+        }
         renderSetup();
       });
       grid.appendChild(card);
@@ -1979,6 +2049,15 @@
       sourceCard.appendChild(
         field("Riverside recording link", linkInput, "riversideLink", "Paste the link to your Riverside recording session."),
       );
+      if (trim(state.riversideLink) === ES.sandboxDemoRiversideLink()) {
+        sourceCard.appendChild(
+          el(
+            "p",
+            { class: "hint sandbox-demo-source-hint", role: "status" },
+            "Example Riverside link added so you can continue — replace it with your own session anytime.",
+          ),
+        );
+      }
     } else {
       sourceCard.appendChild(
         el("p", { class: "hint" }, "Add a separate synced video file for each speaker in the cards below — or attach placeholder files to try the flow without real uploads."),
@@ -2041,30 +2120,19 @@
       );
     }
 
-    form.appendChild(
-      el(
-        "div",
-        { class: "actions setup-actions setup-cta-bar" },
-        activeShowId
-          ? el("button", { type: "button", class: "btn-secondary", id: "setup-back-show" }, "← Back to show")
-          : null,
-        el("button", { type: "submit", class: "btn-primary setup-continue-btn" }, "Continue to audio polish →"),
-      ),
-    );
+    form.appendChild(renderSetupContinueBar());
 
     root.appendChild(form);
     clearSpeakerAutofillLeak();
     const backShow = document.getElementById("setup-back-show");
-    if (backShow) {
-      backShow.addEventListener("click", () => {
-        persistEpisodeSession();
-        renderShowDetail(activeShowId);
-      });
+    if (backShow && !activeShowId) {
+      backShow.remove();
     }
 
     if (showErrors) {
       focusFirstError();
     }
+    ensureSetupStyleApplied();
     syncImportReadyBanner();
     persistEpisodeSession();
   }
@@ -2250,32 +2318,49 @@
     return card;
   }
 
-  function onContinue() {
+  function tryCompleteSetupHandoff(options) {
+    const opts = options && typeof options === "object" ? options : {};
     readSetupFormState();
+    applySandboxHandoffSourceIfNeeded();
     applyReadyImportDefaults();
+    ensureSetupStyleApplied();
+    applyPendingShowNameDefault();
     if (pendingShowCreation && !finalizePendingShowCreation()) {
-      renderSetup();
-      return;
+      if (opts.quiet) {
+        showErrors = false;
+        errors = {};
+      }
+      return false;
     }
     readSetupFormState();
+    applySandboxHandoffSourceIfNeeded();
     applyReadyImportDefaults();
+    ensureSetupStyleApplied();
     const result = ES.validateDraft(state);
-    errors = result.errors;
-    showErrors = true;
-    if (result.ok) {
-      const summary = ES.summarize(state);
-      if (SC && !contextApproved) {
-        contextReview = SC.createReview(summary);
+    if (!result.ok) {
+      if (!opts.quiet) {
+        errors = result.errors;
+        showErrors = true;
       }
-      if (AP && !audioPolish) {
-        audioPolish = AP.createPolish(summary);
-      }
-      if (STY && styleSelection) {
-        appliedStyle = STY.summarizeStyle(styleSelection, summary.speakerCount);
-      }
-      persistEpisodeSession();
-      renderWorkspace(summary);
-    } else {
+      return false;
+    }
+    const summary = ES.summarize(state);
+    if (SC && !contextApproved) {
+      contextReview = SC.createReview(summary);
+    }
+    if (AP && !audioPolish) {
+      audioPolish = AP.createPolish(summary);
+    }
+    if (STY && styleSelection) {
+      appliedStyle = STY.summarizeStyle(styleSelection, summary.speakerCount);
+    }
+    persistEpisodeSession();
+    renderWorkspace(summary);
+    return true;
+  }
+
+  function onContinue() {
+    if (!tryCompleteSetupHandoff()) {
       renderSetup();
     }
   }
@@ -2537,11 +2622,11 @@
         { class: "workspace-head" },
         el("p", { class: "eyebrow" }, "Production workspace"),
         el("h2", {}, summary.episodeName),
-        el("p", { class: "hint" }, "Your import is saved below — sources, speaker buckets, names, and social context are driving this episode setup."),
+        el("p", { class: "hint" }, "Setup is complete — your preset, recording source, speaker roles, and social context are driving the stages below."),
       ),
     );
 
-    view.appendChild(renderEpisodeImportRecap(summary));
+    view.appendChild(renderEpisodeImportRecap(summary, { presetSummary: importStyleSummaryLine() }));
 
     if (WS) {
       ensureMomentsBoard(summary);

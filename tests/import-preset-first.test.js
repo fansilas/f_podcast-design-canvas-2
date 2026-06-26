@@ -55,8 +55,10 @@ test("ACCEPTANCE: preset selection updates applied style before continue", () =>
   const summary = style.summarizeStyle(next, 3);
   assert.strictEqual(summary.presetId, style.STYLE_PRESETS[1].id);
   assert.ok(summary.presetName.length > 0);
-  const continueBlock = ui.slice(ui.indexOf("function onContinue()"), ui.indexOf("function focusFirstError()"));
-  assert.ok(continueBlock.includes("STY.summarizeStyle(styleSelection, summary.speakerCount)"));
+  const handoffBlock = ui.slice(ui.indexOf("function tryCompleteSetupHandoff"), ui.indexOf("function onContinue()"));
+  const presetBlock = ui.slice(ui.indexOf("function renderSetupPresetSection"), ui.indexOf("function renderSetup()"));
+  assert.ok(handoffBlock.includes("STY.summarizeStyle(styleSelection, summary.speakerCount)"));
+  assert.ok(presetBlock.includes("tryCompleteSetupHandoff({ quiet: true })"));
 });
 
 console.log(`\nimport preset-first: ${passed} assertions passed`);

@@ -86,12 +86,24 @@ test("applyImportContinueDefaults completes a riverside draft when names are sti
   assert.strictEqual(setup.validateDraft(ready).ok, true);
 });
 
+test("buildSetupCompletionHandoff marks setup complete for workspace recap", () => {
+  const summary = setup.summarize(completeRiversideDraft());
+  const completion = setup.buildSetupCompletionHandoff(summary, { presetSummary: "Studio Spotlight" });
+  assert.strictEqual(completion.completionEyebrow, "Setup complete");
+  assert.ok(completion.presetSummary.includes("Studio Spotlight"));
+  assert.ok(completion.episodeTitle.includes("Episode 1"));
+});
+
 test("import handoff UI lands in workspace immediately after setup continue", () => {
+  const handoffBlock = ui.slice(ui.indexOf("function tryCompleteSetupHandoff"), ui.indexOf("function onContinue()"));
   const continueBlock = ui.slice(ui.indexOf("function onContinue()"), ui.indexOf("function focusFirstError()"));
-  assert.ok(continueBlock.includes("renderWorkspace(summary)"));
-  assert.ok(!/if \(SC && !contextApproved\)[\s\S]*renderContextReview\(summary\)/.test(continueBlock));
-  assert.ok(ui.includes("episode-import-handoff"));
-  assert.ok(ui.includes("Import accepted"));
+  assert.ok(handoffBlock.includes("renderWorkspace(summary)"));
+  assert.ok(handoffBlock.includes("applySandboxHandoffSourceIfNeeded"));
+  assert.ok(handoffBlock.includes("ensureSetupStyleApplied"));
+  assert.ok(continueBlock.includes("tryCompleteSetupHandoff"));
+  assert.ok(!/if \(SC && !contextApproved\)[\s\S]*renderContextReview\(summary\)/.test(handoffBlock));
+  assert.ok(ui.includes("tryCompleteSetupHandoff()"));
+  assert.ok(ui.includes("buildSetupCompletionHandoff"));
   assert.ok(ui.includes("applyReadyImportDefaults"));
   assert.ok(ui.includes("setup-import-ready-banner"));
 });
@@ -107,11 +119,14 @@ test("ACCEPTANCE: completing import produces workspace handoff data and blocks i
   riversideOnly.riversideLink = "https://riverside.fm/studio/probe-path";
   const ready = setup.applyImportContinueDefaults(riversideOnly, { showName: "Probe Show" });
   assert.strictEqual(setup.validateDraft(ready).ok, true);
-  const handoff = setup.buildImportHandoff(setup.summarize(ready));
-  assert.strictEqual(handoff.speakers.length, 3);
-  assert.ok(handoff.speakers.every((speaker) => speaker.role && speaker.sourceLabel));
-  assert.ok(handoff.sourceDetail.includes("riverside.fm"));
-  assert.ok(handoff.confirmationLead.length > 0);
+  const completion = setup.buildSetupCompletionHandoff(setup.summarize(ready), {
+    presetSummary: "Studio Spotlight",
+  });
+  assert.strictEqual(completion.completionEyebrow, "Setup complete");
+  assert.strictEqual(completion.handoff.speakers.length, 3);
+  assert.ok(completion.handoff.speakers.every((speaker) => speaker.role && speaker.sourceLabel));
+  assert.ok(completion.handoff.sourceDetail.includes("riverside.fm"));
+  assert.ok(completion.roleSummary.includes("Host"));
 });
 
 console.log(`\nimport handoff: ${passed} assertions passed`);

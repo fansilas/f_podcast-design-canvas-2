@@ -293,6 +293,26 @@
     return "My podcast show";
   }
 
+  function sandboxDemoRiversideLink() {
+    return "https://riverside.fm/studio/podcast-canvas-demo";
+  }
+
+  // When a creator picks a preset but has not pasted a Riverside link yet, attach a
+  // review-friendly demo link so Continue can complete setup (same spirit as placeholder files).
+  function applySandboxHandoffSource(draft) {
+    const data = draft && typeof draft === "object" ? draft : createDraft();
+    if (normalizeMode(data.sourceMode) === "riverside" && !trim(data.riversideLink)) {
+      data.riversideLink = sandboxDemoRiversideLink();
+    }
+    return data;
+  }
+
+  function prepareSandboxPresetHandoff(draft, options) {
+    const opts = options && typeof options === "object" ? options : {};
+    const showName = trim(opts.showName) || defaultImportShowName();
+    return applyImportContinueDefaults(applySandboxHandoffSource(draft), { showName });
+  }
+
   // When a valid import source is present but optional identity fields are blank, fill
   // creator-friendly defaults so Continue can land in the workspace handoff without
   // blocking on every text field (same spirit as placeholder files for upload review).
@@ -355,6 +375,22 @@
     };
   }
 
+  function buildSetupCompletionHandoff(summary, options) {
+    const handoff = buildImportHandoff(summary);
+    const opts = options && typeof options === "object" ? options : {};
+    const presetSummary = trim(opts.presetSummary);
+    return {
+      episodeTitle: trim(summary && summary.episodeName) || "Untitled episode",
+      presetSummary: presetSummary || "Choose a preset during setup",
+      completionEyebrow: "Setup complete",
+      completionLead: presetSummary
+        ? "Your preset, recording source, speaker roles, and social context are saved and driving this episode in the production workspace."
+        : handoff.confirmationLead,
+      roleSummary: handoff.speakers.map((speaker) => speaker.identityLine).filter(Boolean).join(" · "),
+      handoff,
+    };
+  }
+
   const api = {
     SPEAKER_BUCKETS,
     SOURCE_MODES,
@@ -378,9 +414,13 @@
     socialLinksBenefitLine,
     importSocialContextCueLine,
     defaultImportShowName,
+    sandboxDemoRiversideLink,
+    applySandboxHandoffSource,
+    prepareSandboxPresetHandoff,
     canApplyImportContinueDefaults,
     applyImportContinueDefaults,
     buildImportHandoff,
+    buildSetupCompletionHandoff,
     summarize,
     validateDraft,
   };
