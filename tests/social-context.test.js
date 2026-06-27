@@ -9,6 +9,7 @@ const assert = require("assert");
 const setup = require("../app/episode-setup.js");
 const style = require("../app/episode-style.js");
 const audio = require("../app/audio-polish.js");
+const { treatedAudio } = require("./helpers/audio-fixtures.js");
 const moments = require("../app/visual-moments.js");
 const context = require("../app/social-context.js");
 const exportApi = require("../app/episode-export.js");
@@ -191,7 +192,7 @@ test("ACCEPTANCE: social links → approve context → moments and export reflec
 
   const selection = style.createSelection();
   const exportCtx = {
-    audioPolish: audio.summarizePolish(audio.createPolish(episode)),
+    audioPolish: treatedAudio(episode),
     appliedStyle: style.summarizeStyle(selection, episode.speakerCount),
     templateName: "Founders Unfiltered",
     momentsSummary: moments.summarizeBoard(board),

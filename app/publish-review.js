@@ -38,6 +38,25 @@
     return moments.filter((moment) => moment.type === "caption" && moment.visible !== false).length;
   }
 
+  // Audio is publish-ready only when every imported track has a durable polished
+  // asset (fingerprint-bound), not merely when a preset name was chosen (#197).
+  function audioTreatedCount(audioPolish) {
+    const ap = audioPolish;
+    if (!ap || !ap.presetName) {
+      return { ready: false, treated: 0, total: 0 };
+    }
+    const treated = Array.isArray(ap.polishedAssets) ? ap.polishedAssets : [];
+    const total = typeof ap.trackCount === "number" ? ap.trackCount : treated.length;
+    if (total === 0) {
+      // No imported speaker media to process (Riverside-link episode): settings-only.
+      return { ready: true, treated: 0, total: 0 };
+    }
+    const ready = treated.length > 0
+      && treated.length === total
+      && treated.every((a) => a && a.outputFingerprint && a.sourceFingerprint);
+    return { ready: ready, treated: treated.length, total: total };
+  }
+
   function runChecks(episodeSummary, ctx) {
     const episode = episodeSummary || {};
     const context = ctx || {};
@@ -98,13 +117,14 @@
       ));
     }
 
-    if (context.audioPolish && context.audioPolish.presetName) {
+    const audioState = audioTreatedCount(context.audioPolish);
+    if (audioState.ready) {
       checks.push(check(
         "audio-ready",
         "audio",
         "ok",
         "Audio polished",
-        `${context.audioPolish.presetName} · ${context.audioPolish.treatmentLine || "treatment applied"}`,
+        `${context.audioPolish.presetName} · ${context.audioPolish.treatmentLine || "treatment applied"} · ${audioState.treated}/${audioState.total} treated asset${audioState.total === 1 ? "" : "s"}`,
         null,
       ));
     } else {
@@ -113,7 +133,7 @@
         "audio",
         "blocker",
         "Audio polish missing",
-        "Choose a sound quality preset so the episode audio is publish-ready.",
+        "Apply audio so every imported speaker track is processed into a saved polished asset.",
         { label: "Polish audio", target: FIX_TARGETS.audio },
       ));
     }
@@ -218,7 +238,7 @@
       ));
     }
 
-    const exportReady = Boolean(context.audioPolish && context.audioPolish.presetName
+    const exportReady = Boolean(audioTreatedCount(context.audioPolish).ready
       && context.appliedStyle && context.appliedStyle.presetName);
     if (exportReady) {
       checks.push(check(
@@ -286,7 +306,16 @@
         id: "audio",
         label: "Audio polish",
         time: "15:00",
-        summary: context.audioPolish ? context.audioPolish.presetName : "Not set",
+        summary: (function () {
+          const a = context.audioPolish;
+          if (!a || !a.presetName) {
+            return "Not set";
+          }
+          const state = audioTreatedCount(a);
+          return state.treated
+            ? `${a.presetName} · ${state.treated}/${state.total} treated asset${state.total === 1 ? "" : "s"}`
+            : a.presetName;
+        }()),
         status: sectionStatus("audio"),
       },
       {

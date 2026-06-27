@@ -10,6 +10,7 @@ const style = require("../app/episode-style.js");
 const audio = require("../app/audio-polish.js");
 const moments = require("../app/visual-moments.js");
 const exportApi = require("../app/episode-export.js");
+const { treatedAudio } = require("./helpers/audio-fixtures.js");
 
 let passed = 0;
 function test(name, fn) {
@@ -33,7 +34,7 @@ function completeUploadDraft() {
 function completeContext(episode) {
   const selection = style.createSelection();
   const appliedStyle = style.summarizeStyle(selection, episode.speakerCount);
-  const polish = audio.summarizePolish(audio.createPolish(episode));
+  const polish = treatedAudio(episode);
   const board = moments.createBoard(episode);
   const withMoment = moments.addMoment(board, "caption", { time: "1:00", text: "Welcome back", speakerRole: "Host" });
   const momentsSummary = moments.summarizeBoard(withMoment);

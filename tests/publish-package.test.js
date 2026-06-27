@@ -7,6 +7,7 @@ const assert = require("assert");
 const setup = require("../app/episode-setup.js");
 const style = require("../app/episode-style.js");
 const audio = require("../app/audio-polish.js");
+const { treatedAudio } = require("./helpers/audio-fixtures.js");
 const moments = require("../app/visual-moments.js");
 const brandKit = require("../app/show-brand-kit.js");
 const exportApi = require("../app/episode-export.js");
@@ -38,7 +39,7 @@ function buildContext(episode) {
   return {
     showName: "Founders Unfiltered",
     appliedStyle: style.summarizeStyle(selection, episode.speakerCount),
-    audioPolish: audio.summarizePolish(audio.createPolish(episode)),
+    audioPolish: treatedAudio(episode),
     momentsBoard: board,
     brandKit: brandKit.createBrandKit("show-1", {
       logoLabel: "Founders mark",

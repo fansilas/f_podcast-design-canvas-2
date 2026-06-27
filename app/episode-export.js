@@ -115,10 +115,32 @@
     return { ok: true };
   }
 
+  // Audio is export-ready only when a durable polished asset exists for EVERY
+  // imported track (each fingerprint-bound to its source) — not merely when a
+  // preset name was chosen. Export consumes these saved assets as the source.
+  function audioTreated(audioPolish) {
+    const ap = audioPolish;
+    if (!ap || !ap.presetName) {
+      return false;
+    }
+    const assets = Array.isArray(ap.polishedAssets) ? ap.polishedAssets : [];
+    const trackTotal = typeof ap.trackCount === "number" ? ap.trackCount : assets.length;
+    if (trackTotal === 0) {
+      // No imported speaker media to process (e.g. a Riverside-link episode): the
+      // audio step is settings-only, so a chosen preset is sufficient.
+      return true;
+    }
+    // With imported media, every track must have a durable, source-bound polished
+    // asset — a chosen preset alone is not enough (#197).
+    return assets.length > 0
+      && assets.length === trackTotal
+      && assets.every((a) => a && a.outputFingerprint && a.sourceFingerprint);
+  }
+
   function validateReadiness(context) {
     const ctx = context || {};
     const missing = [];
-    if (!ctx.audioPolish || !ctx.audioPolish.presetName) {
+    if (!audioTreated(ctx.audioPolish)) {
       missing.push("audio");
     }
     if (!ctx.appliedStyle || !ctx.appliedStyle.presetName) {
@@ -156,6 +178,11 @@
 
     if (ctx.audioPolish && ctx.audioPolish.presetName) {
       lines.push(`Audio: ${ctx.audioPolish.presetName} (${ctx.audioPolish.treatmentLine || "treatment applied"})`);
+    }
+    if (ctx.audioPolish && Array.isArray(ctx.audioPolish.polishedAssets) && ctx.audioPolish.polishedAssets.length) {
+      const treated = ctx.audioPolish.polishedAssets;
+      const total = typeof ctx.audioPolish.trackCount === "number" ? ctx.audioPolish.trackCount : treated.length;
+      lines.push(`Polished audio: ${treated.length}/${total} treated asset${total === 1 ? "" : "s"} (export renders from these)`);
     }
     if (ctx.appliedStyle && ctx.appliedStyle.presetName) {
       lines.push(

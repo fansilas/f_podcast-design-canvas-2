@@ -7,6 +7,7 @@ const assert = require("assert");
 const setup = require("../app/episode-setup.js");
 const style = require("../app/episode-style.js");
 const audio = require("../app/audio-polish.js");
+const { treatedAudio } = require("./helpers/audio-fixtures.js");
 const moments = require("../app/visual-moments.js");
 const contextApi = require("../app/social-context.js");
 const review = require("../app/publish-review.js");
@@ -39,7 +40,7 @@ function exportContext(episode, options) {
   let contextReview = contextApi.createReview(episode);
   contextReview = contextApi.approveReview(contextReview);
   let publishReview = review.createReview(episode, {
-    audioPolish: audio.summarizePolish(audio.createPolish(episode)),
+    audioPolish: treatedAudio(episode),
     appliedStyle: style.summarizeStyle(selection, episode.speakerCount),
     templateName: "Founders Look",
     hasCanvas: true,
@@ -53,7 +54,7 @@ function exportContext(episode, options) {
     publishReview = review.approveReview(publishReview).review;
   }
   return {
-    audioPolish: audio.summarizePolish(audio.createPolish(episode)),
+    audioPolish: treatedAudio(episode),
     appliedStyle: style.summarizeStyle(selection, episode.speakerCount),
     templateName: "Founders Look",
     momentsSummary: moments.summarizeBoard(board),

@@ -11,6 +11,7 @@ const moments = require("../app/visual-moments.js");
 const workspace = require("../app/episode-workspace.js");
 const review = require("../app/publish-review.js");
 const exportApi = require("../app/episode-export.js");
+const { treatedAudio } = require("./helpers/audio-fixtures.js");
 
 let passed = 0;
 function test(name, fn) {
@@ -36,7 +37,7 @@ function baseCtx(episode, overrides) {
   board = moments.addMoment(board, "caption", { time: 30, text: "Welcome", speakerRole: "Host" });
   return Object.assign({
     appliedStyle: style.summarizeStyle(selection, episode.speakerCount),
-    audioPolish: audio.summarizePolish(audio.createPolish(episode)),
+    audioPolish: treatedAudio(episode),
     templateName: "Founders Format",
     momentsSummary: moments.summarizeBoard(board),
     contextApproved: true,

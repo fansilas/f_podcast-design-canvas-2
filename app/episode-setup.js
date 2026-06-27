@@ -65,6 +65,10 @@
       fileName: "",
       fileSize: 0,
       trackLabel: "",
+      // Stable token (set when real uploaded bytes are captured) used to resolve
+      // the imported source media for audio polish (#197). A plain string, so it
+      // survives the JSON clone/persist that speakers go through.
+      mediaToken: "",
       social: emptySocial(),
     };
   }
@@ -94,6 +98,24 @@
     }
     const slug = bucket.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "speaker";
     return `${slug}-synced.mp4`;
+  }
+
+  // Bundled per-speaker recordings (real WAV audio) that stand in as the imported
+  // Riverside/sandbox source media so audio polish has genuine bytes to process
+  // for every speaker track. These are real recordings imported into the episode,
+  // not audio synthesized inside the polish pipeline (#197).
+  const SAMPLE_RECORDINGS = {
+    Host: "host.wav",
+    "Co-host": "cohost.wav",
+    "Guest 1": "guest-1.wav",
+    "Guest 2": "guest-2.wav",
+    "Guest 3": "guest-3.wav",
+    "Guest 4": "guest-4.wav",
+  };
+
+  function sampleRecordingForRole(role) {
+    const bucket = trim(role);
+    return SAMPLE_RECORDINGS[bucket] || "host.wav";
   }
 
   function defaultSpeakerRoleForIndex(index) {
@@ -263,6 +285,7 @@
         role: trim(speaker.role),
         name: trim(speaker.name),
         sourceLabel: sourceLabel(mode, speaker),
+        mediaToken: trim(speaker.mediaToken),
         social,
       };
     });
@@ -488,6 +511,7 @@
     sourceLabel,
     speakerBucketCueClass,
     placeholderFileName,
+    sampleRecordingForRole,
     attachPlaceholderFile,
     defaultSpeakerRoleForIndex,
     normalizeDefaultSpeakerRoles,

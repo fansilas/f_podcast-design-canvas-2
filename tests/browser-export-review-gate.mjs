@@ -45,10 +45,13 @@ async function completeSetup(page) {
 }
 
 async function polishAudioFromWorkspace(page) {
-  await page.locator("#workspace-primary-next, .workspace-checklist-open").filter({ hasText: "Polish audio" }).first().click();
+  await page.locator("#workspace-primary-next, .workspace-checklist-open").filter({ hasText: /Polish audio|Change audio/ }).first().click();
   await page.locator(".audio-step").waitFor();
   await page.locator(".audio-preset-card").first().click();
-  await page.getByRole("button", { name: "Apply audio & continue →" }).click();
+  // Apply now processes the imported tracks in place, then unlocks Continue.
+  await page.locator("#audio-apply-btn").click();
+  await page.locator("#audio-continue-btn").waitFor({ state: "visible", timeout: 20000 });
+  await page.locator("#audio-continue-btn").click();
   await page.locator(".guided-workspace").waitFor({ state: "visible" });
 }
 
