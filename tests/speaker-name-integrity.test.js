@@ -7,6 +7,7 @@ const assert = require("assert");
 const setup = require("../app/episode-setup.js");
 const style = require("../app/episode-style.js");
 const audio = require("../app/audio-polish.js");
+const { treatedAudio } = require("./helpers/audio-fixtures.js");
 const canvasEditor = require("../app/canvas-editor.js");
 const moments = require("../app/visual-moments.js");
 const context = require("../app/social-context.js");
@@ -167,7 +168,7 @@ test("ACCEPTANCE: Sam Rivera stays exact from setup through templates and export
     templateName: savedTemplate.name,
   });
   const exportSummary = exportApi.buildFinalSummary(episode, {
-    audioPolish: audio.summarizePolish(audio.createPolish(episode)),
+    audioPolish: treatedAudio(episode),
     appliedStyle: appliedStyle,
     templateName: savedTemplate.name,
     momentsSummary: momentsSummary,

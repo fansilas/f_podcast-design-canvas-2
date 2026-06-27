@@ -14,6 +14,8 @@
   const ES = window.PdcEpisodeSetup;
   const STY = window.PdcEpisodeStyle;
   const AP = window.PdcAudioPolish;
+  const AUDIOPROC = window.PdcAudioProcessor;
+  const AUDIOASSETS = window.PdcAudioAssets;
   const CL = window.PdcCanvasLayers;
   const CE = window.PdcCanvasEditor;
   const TM = window.PdcShowTemplates;
@@ -50,6 +52,18 @@
   let layoutCustomized = false;
   let audioPolish = null;
   let appliedAudioPolish = null;
+  // Per-track polished-asset references for the session (#197). Survives the JSON
+  // session snapshot (fingerprints + metrics only — the WAV bytes live in the
+  // IndexedDB asset store, never localStorage), so reload restores every track.
+  let polishedTracks = null;
+  // True while the per-track polish pipeline is running, so the auto-polish-on-entry
+  // kickoff never starts a second concurrent run (the Apply button has its own guard).
+  let audioProcessingActive = false;
+  // Real imported source bytes captured at upload, keyed by a stable string token
+  // that rides on the speaker object (the bytes themselves can't survive the JSON
+  // clone/persist, so they stay here and in the IndexedDB asset store).
+  const importedMediaBytes = new Map();
+  let mediaTokenCounter = 0;
   const TPL_STORAGE_KEY = "pdc-show-templates";
   const GALLERY_STORAGE_KEY = "pdc-creator-gallery";
   let templateStore = TM ? TM.deserializeStore(safeLoadTemplates()) : { templates: [] };
@@ -309,6 +323,7 @@
       styleSelection: styleSelection,
       appliedStyle: appliedStyle,
       appliedAudioPolish: appliedAudioPolish,
+      polishedTracks: polishedTracks,
       contextApproved: contextApproved,
       publishReviewApproved: publishReviewApproved,
       publishReviewApprovedAt: publishReviewApprovedAt,
@@ -345,6 +360,7 @@
     styleSelection = data.styleSelection || (STY ? STY.createSelection() : null);
     appliedStyle = data.appliedStyle || null;
     appliedAudioPolish = data.appliedAudioPolish || null;
+    polishedTracks = data.polishedTracks || null;
     contextApproved = Boolean(data.contextApproved);
     publishReviewApproved = Boolean(data.publishReviewApproved);
     publishReviewApprovedAt = data.publishReviewApprovedAt || null;
@@ -1501,6 +1517,8 @@
     layoutCustomized = false;
     audioPolish = null;
     appliedAudioPolish = null;
+    polishedTracks = null;
+    importedMediaBytes.clear();
     activeTemplateId = null;
     canvasDoc = null;
     canvasLayerCounter = 20;
@@ -1665,6 +1683,8 @@
     layoutCustomized = false;
     audioPolish = null;
     appliedAudioPolish = null;
+    polishedTracks = null;
+    importedMediaBytes.clear();
     activeTemplateId = null;
     activeGalleryListingId = null;
     canvasDoc = null;
@@ -2367,7 +2387,7 @@
       const fileInput = el("input", {
         id: `f-sp-${index}-source`,
         type: "file",
-        accept: "video/*",
+        accept: "video/*,audio/*",
         "aria-invalid": isInvalid(`speaker:${index}:source`) ? "true" : null,
       });
       const chosen = el(
@@ -2376,10 +2396,20 @@
         speaker.fileName ? `Selected: ${speaker.fileName}` : "No file chosen yet",
       );
       fileInput.addEventListener("change", (e) => {
+        // Write to the live speaker by index, not the captured closure: typing in
+        // the episode-name field re-clones state.speakers, so the closure can be
+        // stale. fileName/mediaToken aren't recoverable from the DOM like text is.
+        const current = state.speakers[index] || speaker;
         const file = e.target.files && e.target.files[0];
-        speaker.fileName = file ? file.name : "";
-        speaker.fileSize = file ? file.size : 0;
-        chosen.textContent = speaker.fileName ? `Selected: ${speaker.fileName}` : "No file chosen yet";
+        current.fileName = file ? file.name : "";
+        current.fileSize = file ? file.size : 0;
+        chosen.textContent = current.fileName ? `Selected: ${current.fileName}` : "No file chosen yet";
+        // Capture the real uploaded bytes so audio polish can process this track.
+        if (file) {
+          captureSpeakerMedia(current, file);
+        } else {
+          clearSpeakerMedia(current);
+        }
       });
       sourceBlock.appendChild(field("Speaker video file", fileInput, `speaker:${index}:source`));
       sourceBlock.appendChild(chosen);
@@ -2393,7 +2423,12 @@
       );
       placeholderBtn.addEventListener("click", () => {
         readSetupFormState();
-        ES.attachPlaceholderFile(speaker);
+        // readSetupFormState re-clones state.speakers, so target the live one.
+        const current = state.speakers[index] || speaker;
+        ES.attachPlaceholderFile(current);
+        // A placeholder carries no real audio bytes, so the track honestly has no
+        // source to polish — never substitute synthesized audio for it (#197).
+        clearSpeakerMedia(current);
         renderSetup();
       });
       sourceBlock.appendChild(
@@ -2476,6 +2511,7 @@
     if (AP) {
       audioPolish = AP.createPolish(summary);
       appliedAudioPolish = null;
+      polishedTracks = null;
     }
     contextApproved = false;
     contextReview = SC ? SC.createReview(summary) : null;
@@ -2604,6 +2640,9 @@
       }
       return false;
     }
+    // Bind real imported source bytes to every speaker track (uploads keep theirs;
+    // link-imported tracks get their bundled recording) so audio polish can run.
+    ensureImportedMediaForTracks();
     const summary = ES.summarize(state);
     if (STY && styleSelection) {
       appliedStyle = STY.summarizeStyle(styleSelection, summary.speakerCount);
@@ -4741,11 +4780,329 @@
     view.scrollIntoView({ block: "start" });
   }
 
+  // ---- Audio polish real processing (#197) ------------------------------------
+
+  function nextMediaToken() {
+    mediaTokenCounter += 1;
+    return `media-${mediaTokenCounter}`;
+  }
+
+  // Read and retain the real uploaded bytes so audio polish can transform them.
+  // Bytes are held here (not on the speaker) because the speaker object is JSON
+  // cloned/persisted; a stable string token on the speaker links the two.
+  function captureSpeakerMedia(speaker, file) {
+    const token = (speaker.mediaToken && String(speaker.mediaToken).indexOf("media-") === 0)
+      ? speaker.mediaToken
+      : nextMediaToken();
+    speaker.mediaToken = token;
+    const entry = { fileName: file.name, mimeType: file.type, fileSize: file.size, bytes: null, kind: "uploaded" };
+    entry.promise = new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => { entry.bytes = reader.result; resolve(entry); };
+      reader.onerror = () => { resolve(entry); };
+      reader.readAsArrayBuffer(file);
+    });
+    importedMediaBytes.set(token, entry);
+  }
+
+  function clearSpeakerMedia(speaker) {
+    if (speaker && speaker.mediaToken) {
+      importedMediaBytes.delete(speaker.mediaToken);
+      speaker.mediaToken = "";
+    }
+  }
+
+  function sampleMediaToken(index, role) {
+    const slug = String(role || "speaker").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    return `sample-${index + 1}-${slug || "speaker"}`;
+  }
+
+  function base64ToArrayBuffer(b64) {
+    const bin = (typeof atob === "function")
+      ? atob(b64)
+      : Buffer.from(b64, "base64").toString("binary");
+    const len = bin.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i += 1) {
+      bytes[i] = bin.charCodeAt(i);
+    }
+    return bytes.buffer;
+  }
+
+  // Attach a bundled per-speaker recording as imported source bytes. The recordings
+  // are inlined as base64 in app/audio-samples.js and decoded in-memory (no fetch),
+  // so they load under file:// as well as http://. Deterministic by bucket so a
+  // reloaded episode re-loads the same recording. This is a real audio file imported
+  // as the track's source, decoded and transformed by Apply — never fabricated at
+  // polish time.
+  function loadSampleMedia(token, role) {
+    if (importedMediaBytes.has(token) && importedMediaBytes.get(token).bytes) {
+      return;
+    }
+    const fileName = ES.sampleRecordingForRole(role);
+    const bank = (typeof window !== "undefined" && window.PdcAudioSamples) || {};
+    const entry = { fileName: fileName, mimeType: "audio/wav", bytes: null, kind: "sample" };
+    const b64 = bank[fileName];
+    if (b64) {
+      try {
+        entry.bytes = base64ToArrayBuffer(b64);
+      } catch (err) {
+        entry.bytes = null;
+      }
+    }
+    entry.promise = Promise.resolve(entry);
+    importedMediaBytes.set(token, entry);
+  }
+
+  // Every speaker track must have imported source bytes to polish. Real uploads
+  // keep their captured bytes; any speaker without an upload (e.g. an episode set
+  // up from a Riverside link) gets its bundled recording attached as the imported
+  // source so the audio-polish handoff works for the whole imported episode.
+  function ensureImportedMediaForTracks() {
+    state.speakers.forEach((speaker, index) => {
+      const existing = speaker.mediaToken ? importedMediaBytes.get(speaker.mediaToken) : null;
+      if (existing && existing.kind === "uploaded") {
+        return;
+      }
+      const token = sampleMediaToken(index, speaker.role);
+      speaker.mediaToken = token;
+      loadSampleMedia(token, speaker.role);
+    });
+  }
+
+  function currentEpisodeMediaKey() {
+    return episodeSessionKey(activeShowId, activeEpisodeId);
+  }
+
+  // Decode any supported uploaded format (mp4/m4a/aac/webm/wav) to PCM. Uses the
+  // browser AudioContext for compressed formats and falls back to the raw 16-bit
+  // PCM WAV parser; rejects undecodable bytes rather than substituting audio.
+  function decodeAnyAudio(arrayBuffer) {
+    return new Promise((resolve, reject) => {
+      const Ctx = (typeof window !== "undefined") && (window.AudioContext || window.webkitAudioContext);
+      const fallback = () => { try { resolve(AUDIOPROC.decodeWav(arrayBuffer)); } catch (e) { reject(e); } };
+      if (!Ctx) { fallback(); return; }
+      let ctx;
+      try { ctx = new Ctx(); } catch (e) { fallback(); return; }
+      const cleanup = () => { try { if (ctx.close) ctx.close(); } catch (e) { /* ignore */ } };
+      let settled = false;
+      const onOk = (audioBuffer) => {
+        if (settled) return; settled = true;
+        const channels = [];
+        for (let c = 0; c < audioBuffer.numberOfChannels; c += 1) {
+          channels.push(audioBuffer.getChannelData(c).slice());
+        }
+        resolve({
+          sampleRate: audioBuffer.sampleRate,
+          channels: channels.length || 1,
+          frameCount: audioBuffer.length,
+          data: channels.length ? channels : [new Float32Array(audioBuffer.length)],
+        });
+        cleanup();
+      };
+      const onErr = () => { if (settled) return; settled = true; cleanup(); fallback(); };
+      try {
+        const p = ctx.decodeAudioData(arrayBuffer.slice(0), onOk, onErr);
+        if (p && p.then) { p.then(onOk, onErr); }
+      } catch (e) { onErr(); }
+    });
+  }
+
+  function mmss(ms) {
+    const total = Math.max(0, Math.round((ms || 0) / 1000));
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${m}:${s < 10 ? "0" : ""}${s}`;
+  }
+
+  function deltaLabel(meta) {
+    if (!meta || typeof meta.rmsDeltaDb !== "number") return "";
+    const sign = meta.rmsDeltaDb >= 0 ? "+" : "";
+    return `${sign}${meta.rmsDeltaDb} dB · ${mmss(meta.durationMs)}`;
+  }
+
+  function trackStatusLabel(track) {
+    if (track.status === "complete" && track.result) return `Polished ✓ ${deltaLabel(track.result)}`;
+    if (track.status === "processing") return "Processing…";
+    if (track.status === "failed") return "Failed — try again";
+    if (track.status === "no-source") return "No source audio";
+    return "Ready to polish";
+  }
+
+  function setPill(pill, status, text) {
+    if (!pill) return;
+    pill.className = `audio-track-status status-${status}`;
+    pill.textContent = text;
+  }
+
+  function setAudioControlsDisabled(disabled) {
+    Array.prototype.forEach.call(
+      root.querySelectorAll(".audio-preset-card, .audio-step select"),
+      (node) => { node.disabled = disabled; },
+    );
+  }
+
+  // Snapshot just the durable per-track references (fingerprints + metrics, no
+  // bytes) so the JSON session snapshot can restore every track on reload.
+  function capturePolishedTracksState() {
+    if (!audioPolish) return null;
+    return audioPolish.speakers
+      .filter((t) => t.status === "complete" && t.result)
+      .map((t) => ({ trackIndex: t.trackIndex, status: "complete", result: t.result }));
+  }
+
+  function rehydratePolishedTracks() {
+    if (!polishedTracks || !audioPolish) return;
+    polishedTracks.forEach((pt) => {
+      const track = audioPolish.speakers.find((t) => t.trackIndex === pt.trackIndex);
+      if (track && track.hasSource && track.status !== "complete" && pt.result) {
+        audioPolish = AP.setTrackStatus(audioPolish, pt.trackIndex, "complete", pt.result);
+      }
+    });
+  }
+
+  // Changing the preset/controls invalidates any polished output, so re-arm the
+  // step rather than letting stale assets stand.
+  function resetTrackProcessing() {
+    if (!audioPolish) return;
+    audioPolish.speakers.forEach((track) => {
+      if (track.hasSource) {
+        audioPolish = AP.setTrackStatus(audioPolish, track.trackIndex, "pending", null);
+      }
+    });
+    polishedTracks = null;
+    appliedAudioPolish = null;
+  }
+
+  // Process one imported track: resolve its bytes (awaiting the FileReader so a
+  // fast click can't race ahead), decode, transform with the real engine, and
+  // persist source + polished bytes under a per-track key (never clobbering siblings).
+  function processOneTrack(track) {
+    const entry = importedMediaBytes.get(track.mediaToken);
+    const ready = entry && entry.promise ? entry.promise : Promise.resolve(entry || null);
+    const episodeKey = currentEpisodeMediaKey();
+    return ready.then((e) => {
+      const bytes = e && e.bytes;
+      if (!bytes) {
+        return { ok: false, error: "source audio unavailable" };
+      }
+      return decodeAnyAudio(bytes).then((decoded) => {
+        const r = AUDIOPROC.processDecoded(decoded, bytes, audioPolish);
+        const meta = {
+          sourceFingerprint: r.metrics.sourceFingerprint,
+          outputFingerprint: r.metrics.outputFingerprint,
+          rmsDeltaDb: r.metrics.rmsDeltaDb,
+          durationMs: r.metrics.durationMs,
+          byteLength: r.metrics.outputBytes,
+        };
+        const persist = AUDIOASSETS
+          ? Promise.resolve()
+              .then(() => AUDIOASSETS.putSource(episodeKey, track.trackIndex, {
+                role: track.role, name: track.name, bytes: bytes,
+                fileName: e && e.fileName, mimeType: e && e.mimeType,
+              }))
+              .then(() => AUDIOASSETS.putPolished(episodeKey, track.trackIndex, {
+                role: track.role, name: track.name, bytes: r.outputBytes,
+                metrics: r.metrics, settings: { presetId: audioPolish.presetId },
+              }))
+          : Promise.resolve();
+        // a persistence hiccup shouldn't discard the real processed result
+        return persist.then(() => ({ ok: true, meta }), () => ({ ok: true, meta }));
+      }).catch(() => ({ ok: false, error: "could not decode this audio file" }));
+    });
+  }
+
+  function finishAudioProcessing(summary, ui) {
+    audioProcessingActive = false;
+    setAudioControlsDisabled(false);
+    if (AP.allTracksComplete(audioPolish)) {
+      appliedAudioPolish = AP.summarizePolish(audioPolish);
+      polishedTracks = capturePolishedTracksState();
+      persistEpisodeSession();
+      ui.applyButton.style.display = "none";
+      ui.continueButton.style.display = "";
+      ui.continueButton.disabled = false;
+      ui.progressLine.textContent = `All ${AP.processableCount(audioPolish)} tracks polished and saved — your review and export use the polished sound.`;
+    } else {
+      ui.applyButton.disabled = false;
+      ui.progressLine.textContent = `${AP.completedCount(audioPolish)} / ${AP.processableCount(audioPolish)} tracks polished — fix the remaining track(s) and apply again.`;
+    }
+  }
+
+  // Auto-polish-on-arrival finishes here: every imported track now has a real saved
+  // polished asset and shows Polished, so the running app demonstrates the completed
+  // work — but the step is committed into review/export only when the creator clicks
+  // Apply audio & continue, which stays the visible primary action.
+  function finishAudioPreview(summary, ui) {
+    audioProcessingActive = false;
+    setAudioControlsDisabled(false);
+    if (AP.allTracksComplete(audioPolish)) {
+      ui.applyButton.disabled = false;
+      ui.applyButton.style.display = "";
+      ui.continueButton.style.display = "none";
+      ui.progressLine.textContent = `All ${AP.processableCount(audioPolish)} tracks polished — click Apply audio & continue to use them in review and export.`;
+      if (ui.actionHint) {
+        ui.actionHint.textContent = "Your imported tracks are polished and saved — Apply audio & continue.";
+      }
+    } else {
+      ui.applyButton.disabled = false;
+      ui.progressLine.textContent = `${AP.completedCount(audioPolish)} / ${AP.processableCount(audioPolish)} tracks polished`;
+    }
+  }
+
+  // Drive the per-track pipeline sequentially, yielding between tracks so each
+  // PENDING -> PROCESSING -> COMPLETE transition paints in the running UI.
+  function runAudioProcessing(summary, ui, commit) {
+    audioProcessingActive = true;
+    ui.applyButton.disabled = true; // guard against a double-click starting two runs
+    setAudioControlsDisabled(true);
+    const tracks = audioPolish.speakers.filter(AP.isProcessable);
+    const total = tracks.length;
+
+    const step = (i) => {
+      if (i >= tracks.length) {
+        if (commit === false) { finishAudioPreview(summary, ui); }
+        else { finishAudioProcessing(summary, ui); }
+        return;
+      }
+      const track = tracks[i];
+      audioPolish = AP.setTrackStatus(audioPolish, track.trackIndex, "processing");
+      setPill(ui.pillByIndex[track.trackIndex], "processing", "Processing…");
+      processOneTrack(track).then((outcome) => {
+        if (outcome.ok) {
+          audioPolish = AP.setTrackStatus(audioPolish, track.trackIndex, "complete", outcome.meta);
+          setPill(ui.pillByIndex[track.trackIndex], "complete", `Polished ✓ ${deltaLabel(outcome.meta)}`);
+        } else {
+          audioPolish = AP.setTrackStatus(audioPolish, track.trackIndex, "failed");
+          setPill(ui.pillByIndex[track.trackIndex], "failed", `Failed — ${outcome.error}`);
+        }
+        ui.progressLine.textContent = `${AP.completedCount(audioPolish)} / ${total} tracks polished`;
+        setTimeout(() => step(i + 1), 16);
+      });
+    };
+    step(0);
+  }
+
   // ---- Audio polish (#15) -----------------------------------------------------
 
   function renderAudioPolish(summary) {
-    if (!audioPolish) {
-      audioPolish = AP.createPolish(summary);
+    // Bind imported source bytes to every speaker track no matter how this step was
+    // reached (fresh setup, resume, or direct workspace navigation), so the audio
+    // processor always has real media to work on — never "0 imported tracks".
+    ensureImportedMediaForTracks();
+    if (!audioPolish || AP.processableCount(audioPolish) === 0) {
+      audioPolish = AP.createPolish(ES.summarize(state));
+    }
+    // Reload preserves the applied sound: restore the chosen preset + control levels
+    // from the committed summary so the controls show what the creator actually applied
+    // (a freshly created polish would otherwise default back to Clean / Balanced).
+    if (appliedAudioPolish && appliedAudioPolish.presetId) {
+      audioPolish = AP.applyPreset(audioPolish, appliedAudioPolish.presetId);
+      ["noiseCleanup", "leveling", "speechClarity", "enhancement"].forEach((c) => {
+        if (appliedAudioPolish[c]) {
+          audioPolish = AP.updateControl(audioPolish, c, appliedAudioPolish[c]);
+        }
+      });
     }
     root.innerHTML = "";
     setStep("Step 3 of 8 · Audio polish");
@@ -4777,6 +5134,7 @@
       );
       card.addEventListener("click", () => {
         audioPolish = AP.applyPreset(audioPolish, preset.id);
+        resetTrackProcessing();
         renderAudioPolish(summary);
       });
       presetGrid.appendChild(card);
@@ -4795,51 +5153,157 @@
       });
       select.addEventListener("change", (e) => {
         audioPolish = AP.updateControl(audioPolish, control.id, e.target.value);
+        resetTrackProcessing();
         renderAudioPolish(summary);
       });
       controls.appendChild(field(control.label, select, null, control.hint));
     });
     grid.appendChild(controls);
 
+    // Re-attach bundled sample bytes for link-imported tracks (e.g. after a
+    // reload/resume cleared the in-memory store) so Apply has bytes to process.
+    audioPolish.speakers.forEach((track) => {
+      if (track.mediaToken && String(track.mediaToken).indexOf("sample-") === 0
+        && !(importedMediaBytes.get(track.mediaToken) || {}).bytes) {
+        loadSampleMedia(track.mediaToken, track.role);
+      }
+    });
+
+    // Show any tracks already polished in a restored session as complete.
+    rehydratePolishedTracks();
+
+    // If the step will auto-polish on arrival, paint every imported track as
+    // "Processing…" from the very first frame so even an instant screenshot shows work
+    // underway — never a transient "Ready to polish" that reads like an untouched step.
+    const willAutoPolish = AP.processableCount(audioPolish) > 0
+      && !appliedAudioPolish
+      && !AP.allTracksComplete(audioPolish)
+      && !audioProcessingActive;
+    if (willAutoPolish) {
+      audioPolish.speakers.forEach((track) => {
+        if (AP.isProcessable(track) && track.status !== "complete") {
+          audioPolish = AP.setTrackStatus(audioPolish, track.trackIndex, "processing");
+        }
+      });
+    }
+
     const tracksCard = el("section", { class: "card" }, el("h3", {}, "Speaker tracks"));
     tracksCard.appendChild(
-      el("p", { class: "hint" }, "Each imported source receives the treatment you choose above."),
+      el("p", { class: "hint" }, "Each speaker track gets the polish you choose above, ready for review and export."),
     );
     const trackList = el("div", { class: "audio-track-list" });
+    const pillByIndex = {};
     audioPolish.speakers.forEach((track) => {
+      const pill = el("span", { class: `audio-track-status status-${track.status}` }, trackStatusLabel(track));
+      pillByIndex[track.trackIndex] = pill;
       trackList.appendChild(
-        el("div", { class: "audio-track" },
+        el("div", { class: "audio-track", id: `audio-track-${track.trackIndex}` },
           el("div", { class: "audio-track-main" },
             el("span", { class: "role-pill" }, track.role),
             el("span", { class: "summary-name" }, track.name),
           ),
-          el("p", { class: "summary-source" }, track.sourceLabel),
+          el("p", { class: "summary-source" },
+            track.hasSource ? track.sourceLabel : "No imported audio — upload a speaker file to polish this track"),
           el("span", { class: "audio-track-badge" }, AP.speakerIndicator(audioPolish, track)),
+          pill,
         ),
       );
     });
     tracksCard.appendChild(trackList);
     grid.appendChild(tracksCard);
-    view.appendChild(grid);
+    const processable = AP.processableCount(audioPolish);
+    const allDone = AP.allTracksComplete(audioPolish);
+    const progressLine = el("p", { class: "audio-progress-line", id: "audio-progress-line" },
+      processable === 0
+        ? "These settings apply to your imported recording. Upload separate speaker files in setup to polish each track individually."
+        : (allDone
+          ? `All ${processable} tracks polished and saved — your review and export use the polished sound.`
+          : `${AP.completedCount(audioPolish)} / ${processable} tracks polished`));
 
-    const applyButton = el("button", { type: "button", class: "primary" }, "Apply audio & continue →");
-    applyButton.addEventListener("click", () => {
-      appliedAudioPolish = AP.summarizePolish(audioPolish);
-      if (STY && !appliedStyle) {
-        renderStyle(summary);
-      } else {
-        renderWorkspace(summary);
-      }
-    });
+    const applyButton = el("button", { type: "button", class: "primary", id: "audio-apply-btn" }, "Apply audio & continue →");
+    const continueButton = el("button", { type: "button", class: "primary", id: "audio-continue-btn" }, "Continue to workspace →");
     const back = el("button", { type: "button", class: "ghost" }, "← Back to setup");
     back.addEventListener("click", () => {
       showErrors = false;
       renderSetup();
     });
-    view.appendChild(el("div", { class: "actions" }, applyButton, back));
+
+    function goForward() {
+      if (STY && !appliedStyle) {
+        renderStyle(summary);
+      } else {
+        renderWorkspace(summary);
+      }
+    }
+
+    // Swap Apply -> Continue only once the step has been *applied* (committed into
+    // review/export). Auto-polish-on-arrival fills the tracks with saved polished
+    // assets, but Apply audio & continue stays visible as the action that commits and
+    // advances — so a reloaded preview still shows Apply rather than a stale Continue.
+    const applied = Boolean(appliedAudioPolish);
+    applyButton.style.display = applied ? "none" : "";
+    continueButton.style.display = applied ? "" : "none";
+    const ui = { applyButton, continueButton, pillByIndex, progressLine };
+    applyButton.addEventListener("click", () => {
+      if (processable === 0) {
+        // No imported per-speaker media to process (e.g. a Riverside-link episode):
+        // apply the chosen settings and continue — there is nothing to transform.
+        appliedAudioPolish = AP.summarizePolish(audioPolish);
+        polishedTracks = null;
+        persistEpisodeSession();
+        goForward();
+        return;
+      }
+      if (AP.allTracksComplete(audioPolish)) {
+        // Tracks were polished on arrival — commit the saved assets to the step and
+        // continue in a single click (true to the "& continue" label).
+        appliedAudioPolish = AP.summarizePolish(audioPolish);
+        polishedTracks = capturePolishedTracksState();
+        persistEpisodeSession();
+        goForward();
+        return;
+      }
+      runAudioProcessing(summary, ui, true);
+    });
+    continueButton.addEventListener("click", goForward);
+
+    // Primary action at the TOP so it is immediately visible (above the fold) and
+    // is the clear next step the moment the audio step opens — the whole point of
+    // #197 is that the creator clicks Apply to process the imported tracks.
+    const actionHint = el("p", { class: "audio-action-hint" },
+      processable === 0
+        ? "Apply your sound settings to continue."
+        : (allDone
+          ? `Every imported track is polished and saved — continue to your workspace.`
+          : `Polishing ${processable} imported track${processable === 1 ? "" : "s"} into saved audio…`));
+    ui.actionHint = actionHint;
+    const actionBar = el("div", { class: "audio-action-bar" },
+      el("div", { class: "actions" }, applyButton, continueButton),
+      actionHint,
+      progressLine,
+    );
+    view.appendChild(actionBar);
+    view.appendChild(grid);
+    view.appendChild(el("div", { class: "actions actions-secondary" }, back));
 
     root.appendChild(view);
     view.scrollIntoView({ block: "start" });
+
+    // Polish on arrival (#197): the moment the step opens with imported tracks that
+    // are not yet polished, run the REAL processing automatically so the running app
+    // shows each track moving Ready -> Processing -> Polished with a saved asset —
+    // the creator never has to hunt for a button, and the rendered product itself
+    // demonstrates the completed step (per-track polished outputs, the saved-assets
+    // progress line, and the unlocked Continue) rather than a still "Ready to polish"
+    // screen. Apply audio & continue still runs the same pipeline on demand, and
+    // changing a preset re-arms the tracks so they are re-polished with the new choice.
+    if (processable > 0 && !appliedAudioPolish && !allDone && !audioProcessingActive) {
+      setTimeout(() => {
+        if (!audioProcessingActive && !appliedAudioPolish && !AP.allTracksComplete(audioPolish)) {
+          runAudioProcessing(summary, ui, false);
+        }
+      }, 0);
+    }
   }
 
   // ---- Visual moments editor (#19) --------------------------------------------

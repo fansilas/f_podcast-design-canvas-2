@@ -1983,6 +1983,84 @@ button.ghost:hover,
   padding: 4px 10px;
 }
 
+/* Per-track processing status (#197): pending -> processing -> complete | failed. */
+.audio-track-status {
+  display: inline-block;
+  margin: 8px 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+}
+
+.audio-track-status.status-pending {
+  color: #5b6171;
+  background: #eef0f6;
+}
+
+.audio-track-status.status-no-source {
+  color: #8a6d3b;
+  background: #fcf3e3;
+}
+
+.audio-track-status.status-processing {
+  color: #6c4cff;
+  background: rgba(108, 76, 255, 0.12);
+  border-color: rgba(108, 76, 255, 0.35);
+}
+
+.audio-track-status.status-complete {
+  color: #14794a;
+  background: #e4f6ec;
+  border-color: #abe2c4;
+}
+
+.audio-track-status.status-failed {
+  color: #b42318;
+  background: #fdecea;
+  border-color: #f4b9b2;
+}
+
+.audio-progress-line {
+  margin: 14px 0 4px;
+  font-weight: 700;
+  color: var(--ink, #1b1f2a);
+}
+
+/* Primary action bar at the top of the audio step (#197) — keeps "Apply audio &
+   continue" above the fold and unmistakable as the next step. */
+.audio-action-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px;
+  margin: 0 0 20px;
+  border: 1px solid rgba(108, 76, 255, 0.35);
+  border-radius: 14px;
+  background: rgba(108, 76, 255, 0.06);
+}
+
+.audio-action-bar .actions {
+  margin: 0;
+}
+
+.audio-action-bar #audio-apply-btn,
+.audio-action-bar #audio-continue-btn {
+  font-size: 16px;
+  padding: 12px 22px;
+}
+
+.audio-action-hint {
+  margin: 0;
+  font-weight: 600;
+  color: var(--brand, #6c4cff);
+}
+
+.actions-secondary {
+  margin-top: 18px;
+}
+
 .audio-summary-preset {
   font-weight: 700;
   font-size: 16px;

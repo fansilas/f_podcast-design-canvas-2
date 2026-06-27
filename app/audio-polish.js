@@ -99,7 +99,57 @@
       name: (speaker && speaker.name) || "Unnamed speaker",
       sourceLabel: (speaker && speaker.sourceLabel) || "Source track",
       trackIndex: index + 1,
+      // Real-processing fields (#197). mediaToken resolves to the imported source
+      // bytes in the side-store; status drives the per-track UI and gates Continue.
+      mediaToken: (speaker && speaker.mediaToken) || "",
+      hasSource: Boolean(speaker && speaker.mediaToken),
+      status: (speaker && speaker.mediaToken) ? "pending" : "no-source",
+      result: null,
     }));
+  }
+
+  // Per-track processing status helpers (#197). A track moves
+  // no-source/pending -> processing -> complete | failed.
+  const TRACK_STATUSES = ["no-source", "pending", "processing", "complete", "failed"];
+
+  function isProcessable(track) {
+    return Boolean(track && track.hasSource);
+  }
+
+  function setTrackStatus(polish, trackIndex, status, result) {
+    const next = Object.assign({}, polish || createPolish({}));
+    next.speakers = (polish && polish.speakers ? polish.speakers : []).map((track) => {
+      if (track.trackIndex !== trackIndex) {
+        return track;
+      }
+      return Object.assign({}, track, {
+        status: TRACK_STATUSES.indexOf(status) >= 0 ? status : track.status,
+        result: result !== undefined ? result : track.result,
+      });
+    });
+    return next;
+  }
+
+  // True only when there is at least one processable track and every processable
+  // track has produced a saved polished asset. Tracks with no imported source
+  // never silently "complete" — they hold the step until real media is attached.
+  function allTracksComplete(polish) {
+    const tracks = polish && Array.isArray(polish.speakers) ? polish.speakers : [];
+    const processable = tracks.filter(isProcessable);
+    if (processable.length === 0) {
+      return false;
+    }
+    return processable.every((track) => track.status === "complete" && track.result);
+  }
+
+  function processableCount(polish) {
+    const tracks = polish && Array.isArray(polish.speakers) ? polish.speakers : [];
+    return tracks.filter(isProcessable).length;
+  }
+
+  function completedCount(polish) {
+    const tracks = polish && Array.isArray(polish.speakers) ? polish.speakers : [];
+    return tracks.filter((track) => track.status === "complete" && track.result).length;
   }
 
   function createPolish(episodeSummary) {
@@ -163,7 +213,29 @@
       enhancementLabel: getLevel(state.enhancement).label,
       speakerCount: Array.isArray(state.speakers) ? state.speakers.length : 0,
       treatmentLine: controlSummary.join(" · "),
+      // Durable polished-asset references (#197). Export/review consume these as
+      // the real downstream source — each is fingerprint-bound to its imported track.
+      trackCount: processableCount(state),
+      polishedAssets: buildPolishedAssets(state),
+      allComplete: allTracksComplete(state),
     };
+  }
+
+  function buildPolishedAssets(polish) {
+    const tracks = polish && Array.isArray(polish.speakers) ? polish.speakers : [];
+    return tracks
+      .filter((track) => track.status === "complete" && track.result)
+      .map((track) => ({
+        trackIndex: track.trackIndex,
+        role: track.role,
+        name: track.name,
+        sourceFingerprint: track.result.sourceFingerprint || "",
+        outputFingerprint: track.result.outputFingerprint || "",
+        rmsDeltaDb: track.result.rmsDeltaDb,
+        durationMs: track.result.durationMs,
+        byteLength: track.result.byteLength || track.result.outputBytes || 0,
+        mediaToken: track.mediaToken || "",
+      }));
   }
 
   // Episode review / export path — rolls audio treatment up with other episode choices.
@@ -208,6 +280,13 @@
     speakerIndicator,
     summarizePolish,
     buildReviewSummary,
+    TRACK_STATUSES,
+    isProcessable,
+    setTrackStatus,
+    allTracksComplete,
+    processableCount,
+    completedCount,
+    buildPolishedAssets,
   };
 
   if (typeof module !== "undefined" && module.exports) {

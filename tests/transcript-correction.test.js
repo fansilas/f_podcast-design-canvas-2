@@ -7,6 +7,7 @@ const assert = require("assert");
 const setup = require("../app/episode-setup.js");
 const style = require("../app/episode-style.js");
 const audio = require("../app/audio-polish.js");
+const { treatedAudio } = require("./helpers/audio-fixtures.js");
 const moments = require("../app/visual-moments.js");
 const context = require("../app/social-context.js");
 const publishPackage = require("../app/publish-package.js");
@@ -146,7 +147,7 @@ test("summarizeCorrection feeds export metadata after approval", () => {
   const summary = correction.summarizeCorrection(review);
 
   const exportSummary = exportApi.buildFinalSummary(episode, {
-    audioPolish: audio.summarizePolish(audio.createPolish(episode)),
+    audioPolish: treatedAudio(episode),
     appliedStyle: style.summarizeStyle(style.createSelection(), episode.speakerCount),
     correctionSummary: summary,
   }, exportApi.createExport(episode));
