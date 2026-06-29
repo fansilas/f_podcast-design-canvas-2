@@ -9,6 +9,7 @@
 const assert = require("assert");
 const setup = require("../app/episode-setup.js");
 const moments = require("../app/visual-moments.js");
+const audio = require("../app/audio-polish.js");
 
 let passed = 0;
 function test(name, fn) {
@@ -206,6 +207,94 @@ test("ACCEPTANCE: episode → build caption/title/b-roll/callout → edit + prev
   assert.strictEqual(moments.listMoments(restored).length, 4);
   assert.strictEqual(moments.getMoment(restored, titleId).text, "Building in Public — Part 2");
   assert.strictEqual(moments.summarizeBoard(restored).counts.callout, 1);
+});
+
+// --- Audio polish → visual moments handoff (#269) ----------------------------------------
+// The forward action out of Step 3 audio polish opens this editor; the polished-track outputs
+// must survive the handoff. These run the real audio pipeline (not string checks) and feed the
+// applied summary through the same helper the screen renders, proving Step 4 keeps the outputs.
+
+function uploadEpisodeWithMedia() {
+  const draft = setup.createDraft();
+  draft.episodeName = "Founders Unfiltered #7";
+  draft.sourceMode = "upload";
+  draft.speakers = [
+    Object.assign(setup.createSpeaker("Host"), { name: "Sam Rivera" }),
+    Object.assign(setup.createSpeaker("Guest 1"), { name: "Dana Kim" }),
+    Object.assign(setup.createSpeaker("Guest 2"), { name: "Marco Vidal" }),
+  ];
+  draft.speakers.forEach((speaker, index) => {
+    setup.attachSourceMediaAsset(speaker, {
+      assetId: `source-media-${index + 1}`,
+      fileName: ["sam.wav", "dana.wav", "marco.wav"][index],
+      fileSize: 8192,
+      mimeType: "audio/wav",
+      storage: "indexedDB",
+    });
+  });
+  return setup.summarize(draft);
+}
+
+test("summarizeAudioHandoff stays empty until audio polish has been applied", () => {
+  const handoff = moments.summarizeAudioHandoff(null);
+  assert.strictEqual(handoff.ready, false);
+  assert.strictEqual(handoff.polishedTrackCount, 0);
+  assert.deepStrictEqual(handoff.tracks, []);
+  assert.strictEqual(handoff.summaryLine, "");
+});
+
+test("summarizeAudioHandoff carries the applied polished tracks into visual editing", () => {
+  const episode = uploadEpisodeWithMedia();
+  // Run the real per-speaker polish pipeline, then hand the applied summary to the moments step.
+  const applied = audio.applyPolishForEpisode(episode).applied;
+  assert.strictEqual(applied.polishComplete, true);
+
+  const handoff = moments.summarizeAudioHandoff(applied);
+  assert.strictEqual(handoff.ready, true);
+  assert.strictEqual(handoff.presetName, "Clean");
+  assert.strictEqual(handoff.polishedTrackCount, 3);
+  assert.strictEqual(handoff.totalTracks, 3);
+  assert.deepStrictEqual(handoff.tracks.map((track) => track.name), ["Sam Rivera", "Dana Kim", "Marco Vidal"]);
+  assert.deepStrictEqual(handoff.tracks.map((track) => track.role), ["Host", "Guest 1", "Guest 2"]);
+  assert.ok(handoff.tracks.every((track) => track.usesPolishedAudio === true));
+  assert.ok(handoff.summaryLine.indexOf("3 polished tracks") >= 0);
+});
+
+test("summarizeAudioHandoff flags tracks still missing media after a partial polish", () => {
+  const draft = setup.createDraft();
+  draft.episodeName = "Indie Makers Weekly — Episode 3";
+  draft.riversideLink = "https://riverside.fm/studio/indie-makers-ep3";
+  const episode = setup.summarize(draft);
+  const applied = audio.applyPolishForEpisode(episode).applied;
+
+  const handoff = moments.summarizeAudioHandoff(applied);
+  assert.strictEqual(handoff.ready, false);
+  assert.strictEqual(handoff.polishedTrackCount, 0);
+  assert.ok(handoff.tracks.every((track) => track.usesPolishedAudio === false));
+  assert.ok(handoff.summaryLine.indexOf("apply it to carry") >= 0);
+});
+
+test("ACCEPTANCE: applied polish hands off to a moments board with the same speakers (#269)", () => {
+  const episode = uploadEpisodeWithMedia();
+  const applied = audio.applyPolishForEpisode(episode).applied;
+
+  // Step 4 keeps the episode + speaker context the polished tracks belong to.
+  const board = moments.createBoard(episode);
+  assert.strictEqual(board.episodeName, "Founders Unfiltered #7");
+  const timelineSpeakers = board.transcript.map((seg) => seg.speakerName);
+  ["Sam Rivera", "Dana Kim", "Marco Vidal"].forEach((name) => {
+    assert.ok(timelineSpeakers.indexOf(name) >= 0, `${name} stays in the visual moments timeline`);
+  });
+  const speakerOptionNames = moments.speakerOptions(episode).map((option) => option.name);
+  assert.ok(speakerOptionNames.indexOf("Sam Rivera") >= 0, "speaker options keep the host");
+
+  // ...and the polished outputs are available to render alongside that context.
+  const handoff = moments.summarizeAudioHandoff(applied);
+  assert.strictEqual(handoff.polishedTrackCount, 3);
+  assert.deepStrictEqual(
+    handoff.tracks.map((track) => track.name),
+    episode.speakers.map((speaker) => speaker.name),
+  );
 });
 
 console.log(`\nvisual moments: ${passed} assertions passed`);

@@ -300,6 +300,54 @@
     };
   }
 
+  // Creator-facing summary of the polished audio carried into visual editing (#269).
+  // Reads the applied audio-polish summary so the visual moments screen can confirm the
+  // per-speaker polished tracks survived the handoff from Step 3 audio polish, keeping the
+  // outputs accessible at the next step. Pure read of the summary shape — no dependency on
+  // the audio module internals — so the same data drives the screen and the tests.
+  function summarizeAudioHandoff(polishSummary) {
+    const summary = polishSummary && typeof polishSummary === "object" ? polishSummary : null;
+    const empty = {
+      ready: false,
+      presetName: "",
+      polishedTrackCount: 0,
+      totalTracks: 0,
+      tracks: [],
+      summaryLine: "",
+    };
+    if (!summary || !summary.presetName) {
+      return empty;
+    }
+    const exportTracks = Array.isArray(summary.exportAudioTracks) ? summary.exportAudioTracks : [];
+    const sourceTracks = exportTracks.length
+      ? exportTracks
+      : (Array.isArray(summary.polishedTracks) ? summary.polishedTracks : []);
+    const tracks = sourceTracks.map((track) => ({
+      trackIndex: track.trackIndex,
+      role: trim(track.role) || "Speaker",
+      name: trim(track.name) || "Unnamed speaker",
+      status: track.status || "",
+      usesPolishedAudio: track.usesPolishedAudio != null
+        ? Boolean(track.usesPolishedAudio)
+        : track.status === "complete",
+    }));
+    const polishedTrackCount = typeof summary.polishedTrackCount === "number"
+      ? summary.polishedTrackCount
+      : tracks.filter((track) => track.usesPolishedAudio).length;
+    const ready = Boolean(summary.allTracksPolished || summary.polishComplete);
+    const summaryLine = polishedTrackCount > 0
+      ? `${summary.presetName} polish carried in — ${polishedTrackCount} polished track${polishedTrackCount === 1 ? "" : "s"} ready for visual editing.`
+      : `${summary.presetName} polish selected — apply it to carry polished tracks into visual editing.`;
+    return {
+      ready,
+      presetName: summary.presetName,
+      polishedTrackCount,
+      totalTracks: tracks.length,
+      tracks,
+      summaryLine,
+    };
+  }
+
   // Persistence is handled by the UI (localStorage); these mirror the show-template store.
   function serializeBoard(board) {
     return JSON.stringify(board || createBoard({}));
@@ -342,6 +390,7 @@
     previewMoment,
     countsByType,
     summarizeBoard,
+    summarizeAudioHandoff,
     serializeBoard,
     deserializeBoard,
   };

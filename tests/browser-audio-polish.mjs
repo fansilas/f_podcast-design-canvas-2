@@ -115,6 +115,24 @@ function probeScript() {
           log(/polished track saved/.test(afterApply), "Speaker badges show polished track saved");
           log(document.querySelectorAll(".audio-track-metrics").length === 3, "Each track shows before/after metrics");
           log(document.querySelectorAll(".audio-track-download").length === 3, "Each track exposes a polished WAV download");
+
+          // #269: the forward action out of audio polish opens the visual moments editor,
+          // carrying the polished-track outputs and speaker/episode context to the next step.
+          log(Boolean(document.querySelector("#audio-continue-moments")), "Applied audio polish offers a forward action into visual moments");
+          clickButton("Continue to visual moments");
+          await waitFor(() => document.querySelector(".moments-step"), "visual moments editor");
+          const moments = document.querySelector(".moments-step").innerText;
+          log(/Polished audio/.test(moments), "Visual moments surfaces the polished audio outputs");
+          log(/3 polished tracks ready for visual editing/.test(moments), "Three polished tracks are carried into visual editing");
+          log(moments.indexOf("Sam Rivera") >= 0, "Visual moments keeps the episode speaker context");
+          log(document.querySelectorAll(".timeline-speaker").length > 0, "Visual moments shows the speaker-aware timeline");
+
+          clickButton("Hear polished audio");
+          await waitFor(() => {
+            const step = document.querySelector(".audio-step");
+            return step && /Polish applied/.test(step.innerText);
+          }, "return to polished audio evidence");
+          log(Boolean(document.querySelector(".audio-step")), "Hear polished audio returns to the saved polished tracks");
         } catch (err) {
           checks.push({ ok: false, message: err && err.stack ? err.stack : String(err) });
         }

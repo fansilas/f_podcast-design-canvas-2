@@ -2106,6 +2106,39 @@ button.ghost:hover,
   border-top: 1px dashed var(--line);
 }
 
+/* Polished audio carried into the visual moments step (#269). */
+.moments-audio-handoff {
+  border-left: 4px solid #1f8a4c;
+  background: rgba(31, 138, 76, 0.05);
+}
+
+.moments-audio-handoff-line {
+  font-weight: 600;
+  color: #1f8a4c;
+}
+
+.moments-audio-tracks {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.moments-audio-track {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: #fcfcff;
+}
+
+.moments-audio-track .audio-track-badge {
+  margin-top: 0;
+  margin-left: auto;
+}
+
 .audio-track-metrics {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
