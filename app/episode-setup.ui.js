@@ -5511,7 +5511,7 @@
     });
     card.appendChild(field("Text", textInput, null));
 
-    const timeInput = el("input", { id: `mtime-${moment.id}`, type: "text", value: moment.time, placeholder: "0:00" });
+    const timeInput = el("input", { id: `mtime-${moment.id}`, type: "text", value: moment.time, placeholder: "0:00 or 1:02:03" });
     timeInput.addEventListener("change", (e) => {
       momentsBoard = VM.updateMoment(momentsBoard, moment.id, { time: e.target.value });
       selectedMomentId = moment.id;
