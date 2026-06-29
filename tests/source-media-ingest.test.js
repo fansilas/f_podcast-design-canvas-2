@@ -23,6 +23,9 @@ test("browser upload path stores selected media bytes before marking the source 
   assert.ok(uiSource.includes("attachImportedSourceMedia(speaker, file, index).then"));
   assert.ok(uiSource.includes("ES.attachSourceMediaAsset(speaker, metadata)"));
   assert.ok(uiSource.includes('accept: "audio/*,video/*"'));
+  assert.ok(uiSource.includes("function applyAudioPolish(summary)"));
+  assert.ok(uiSource.includes("AP.runPolish(audioPolish"));
+  assert.ok(uiSource.includes("savePolishedMediaBlob"));
 });
 
 test("durable imported media survives session serialization into audio polish", () => {

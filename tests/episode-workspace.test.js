@@ -45,7 +45,7 @@ function baseCtx(episode, overrides) {
   board = moments.addMoment(board, "caption", { time: 30, text: "Welcome", speakerRole: "Host" });
   return Object.assign({
     appliedStyle: style.summarizeStyle(selection, episode.speakerCount),
-    audioPolish: audio.summarizePolish(audio.createPolish(episode)),
+    audioPolish: audio.applyPolishForEpisode(episode).applied,
     templateName: "Founders Format",
     momentsSummary: moments.summarizeBoard(board),
     contextApproved: true,

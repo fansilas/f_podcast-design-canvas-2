@@ -38,6 +38,22 @@
     return moments.filter((moment) => moment.type === "caption" && moment.visible !== false).length;
   }
 
+  function audioPolishApi() {
+    if (typeof module !== "undefined" && module.exports && typeof require === "function") {
+      return require("./audio-polish.js");
+    }
+    const g = typeof window !== "undefined" ? window : globalThis;
+    return g.PdcAudioPolish;
+  }
+
+  function isAudioPolishReady(context) {
+    const AP = audioPolishApi();
+    if (AP) {
+      return AP.isPolishReady(context && context.audioPolish);
+    }
+    return Boolean(context && context.audioPolish && context.audioPolish.presetName);
+  }
+
   function runChecks(episodeSummary, ctx) {
     const episode = episodeSummary || {};
     const context = ctx || {};
@@ -98,13 +114,17 @@
       ));
     }
 
-    if (context.audioPolish && context.audioPolish.presetName) {
+    if (isAudioPolishReady(context)) {
+      const polishedCount = context.audioPolish.polishedTrackCount || 0;
+      const detail = polishedCount > 0
+        ? `${context.audioPolish.presetName} · ${polishedCount} polished track${polishedCount === 1 ? "" : "s"} · ${context.audioPolish.treatmentLine || "treatment applied"}`
+        : `${context.audioPolish.presetName} · ${context.audioPolish.treatmentLine || "treatment applied"}`;
       checks.push(check(
         "audio-ready",
         "audio",
         "ok",
         "Audio polished",
-        `${context.audioPolish.presetName} · ${context.audioPolish.treatmentLine || "treatment applied"}`,
+        detail,
         null,
       ));
     } else {
@@ -218,7 +238,7 @@
       ));
     }
 
-    const exportReady = Boolean(context.audioPolish && context.audioPolish.presetName
+    const exportReady = Boolean(isAudioPolishReady(context)
       && context.appliedStyle && context.appliedStyle.presetName);
     if (exportReady) {
       checks.push(check(

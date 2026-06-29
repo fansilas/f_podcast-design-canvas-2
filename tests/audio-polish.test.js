@@ -1,7 +1,7 @@
 "use strict";
 
-// Audio polish smoke suite for Podcast Design Canvas (#15).
-// Guards quality presets, per-speaker tracks, control adjustments, and review summary.
+// Audio polish smoke suite for Podcast Design Canvas (#15, #257).
+// Guards quality presets, per-speaker tracks, DSP outputs, and review summary.
 // Run with: `node tests/audio-polish.test.js`.
 
 const assert = require("assert");
@@ -35,6 +35,10 @@ function completeUploadDraft() {
     });
   });
   return draft;
+}
+
+function appliedPolishForEpisode(episode, polishState) {
+  return audio.applyPolishForEpisode(episode, polishState || audio.createPolish(episode)).applied;
 }
 
 test("offers Natural, Clean, and Studio quality presets", () => {
@@ -82,6 +86,7 @@ test("createPolish preserves imported source media references for downstream pro
   const summary = audio.summarizePolish(polish);
   assert.strictEqual(summary.sourceMediaCount, 1);
   assert.strictEqual(summary.sourceMediaReady, false);
+  assert.strictEqual(summary.polishComplete, false);
 });
 
 test("applyPreset updates all polish controls", () => {
@@ -111,12 +116,85 @@ test("summarizePolish reflects the chosen treatment", () => {
   assert.strictEqual(summary.noiseCleanupLabel, "Light");
   assert.ok(summary.treatmentLine.includes("Noise cleanup: Light"));
   assert.strictEqual(summary.speakerCount, 3);
+  assert.strictEqual(summary.polishComplete, false);
 });
 
-test("buildReviewSummary includes audio in the export path", () => {
+function decodeSampleRecording(index) {
+  const rec = require("../app/sample-recordings.js").sampleRecording(index || 0);
+  const base64 = rec.dataUrl.split(",")[1];
+  const bytes = Uint8Array.from(Buffer.from(base64, "base64"));
+  return audio.decodeWav(bytes);
+}
+
+test("ships real sample recordings that decode to 16-bit PCM audio", () => {
+  const recordings = require("../app/sample-recordings.js").SAMPLE_RECORDINGS;
+  assert.ok(recordings.length >= 2);
+  recordings.forEach((rec) => {
+    assert.ok(rec.dataUrl.indexOf("data:audio/wav;base64,") === 0);
+    assert.ok(rec.byteLength > 44);
+  });
+  const decoded = decodeSampleRecording(0);
+  assert.ok(decoded.sampleRate > 0);
+  assert.ok(decoded.samples.length > 0);
+});
+
+test("polishSamples transforms audio and encodeWav round-trips in Node", () => {
+  const { samples, sampleRate } = decodeSampleRecording(0);
+  const before = audio.rmsOfSamples(samples);
+  const polished = audio.polishSamples(samples, sampleRate, {
+    noiseCleanup: "strong",
+    leveling: "strong",
+    speechClarity: "strong",
+    enhancement: "strong",
+  });
+  const after = audio.rmsOfSamples(polished);
+  assert.notStrictEqual(before, after);
+
+  const wav = audio.encodeWav(polished, sampleRate);
+  assert.ok(wav.byteLength > 44);
+  const decoded = audio.decodeWav(wav);
+  assert.strictEqual(decoded.sampleRate, sampleRate);
+  assert.strictEqual(decoded.samples.length, polished.length);
+});
+
+test("riverside-only episodes do not fake-complete polish without uploaded speaker media", () => {
+  const draft = setup.createDraft();
+  draft.episodeName = "Indie Makers Weekly — Episode 3";
+  draft.riversideLink = "https://riverside.fm/studio/indie-makers-ep3";
+  const episode = setup.summarize(draft);
+  const applied = audio.applyPolishForEpisode(episode).applied;
+  assert.strictEqual(applied.polishComplete, false);
+  assert.strictEqual(applied.allTracksPolished, false);
+  assert.strictEqual(applied.polishedTrackCount, 0);
+  assert.ok(applied.exportAudioTracks.every((track) => !track.usesPolishedAudio));
+  assert.ok(applied.polishedTracks.every((track) => track.status === "needs-media"));
+});
+
+test("processPolishTracks creates polished outputs for every source track", () => {
   const episode = setup.summarize(completeUploadDraft());
-  const polish = audio.summarizePolish(audio.createPolish(episode));
-  const review = audio.buildReviewSummary(episode, polish, {
+  const polish = audio.createPolish(episode);
+  const outcome = audio.processPolishTracks(polish, audio.defaultSampleLoader);
+  assert.strictEqual(outcome.complete, true);
+  assert.strictEqual(outcome.results.length, 3);
+  outcome.results.forEach((track) => {
+    assert.strictEqual(track.status, "complete");
+    assert.ok(track.polishedAsset && track.polishedAsset.assetId);
+    assert.ok(track.byteLength > 44);
+    assert.ok(track.metrics && typeof track.metrics.inputRms === "number");
+    assert.ok(track.metrics.outputRms >= 0);
+  });
+  const applied = audio.summarizePolish(outcome.polish, { polishedTracks: outcome.results });
+  assert.strictEqual(applied.polishedTrackCount, 3);
+  assert.strictEqual(applied.allTracksPolished, true);
+  assert.strictEqual(applied.polishComplete, true);
+  assert.strictEqual(applied.exportAudioTracks.length, 3);
+  assert.strictEqual(applied.exportAudioTracks[0].usesPolishedAudio, true);
+});
+
+test("buildReviewSummary includes audio in the export path when polish is complete", () => {
+  const episode = setup.summarize(completeUploadDraft());
+  const applied = appliedPolishForEpisode(episode);
+  const review = audio.buildReviewSummary(episode, applied, {
     styleName: "Studio Spotlight",
     templateName: "Founders Unfiltered",
   });
@@ -125,6 +203,7 @@ test("buildReviewSummary includes audio in the export path", () => {
   assert.strictEqual(review.styleName, "Studio Spotlight");
   assert.strictEqual(review.readyForExport, true);
   assert.ok(review.summaryLines.some((line) => line.indexOf("Audio:") === 0));
+  assert.ok(review.summaryLines.some((line) => line.indexOf("Polished tracks:") === 0));
 });
 
 test("ACCEPTANCE: episode setup flows into audio polish and saves a review summary", () => {
@@ -137,9 +216,11 @@ test("ACCEPTANCE: episode setup flows into audio polish and saves a review summa
 
   polish = audio.applyPreset(polish, "clean");
   polish = audio.updateControl(polish, "speechClarity", "strong");
-  const applied = audio.summarizePolish(polish);
+  const applied = audio.applyPolishForEpisode(episode, polish).applied;
   assert.strictEqual(applied.presetName, "Clean");
   assert.strictEqual(applied.speechClarityLabel, "Strong");
+  assert.strictEqual(applied.polishedTrackCount, 3);
+  assert.strictEqual(applied.polishComplete, true);
 
   const review = audio.buildReviewSummary(episode, applied, {});
   assert.strictEqual(review.readyForExport, true);
